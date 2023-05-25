@@ -21,7 +21,9 @@
 #include "myprintf.h"
 #include "sensorConfig.h"
 #include "lcd.h"
+
 #include <string.h>
+#include <stdio.h>
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 
@@ -59,6 +61,8 @@ float USER_pressure_sensor(uint16_t dataADC, float voltage);
 float USER_flow_sensor(uint16_t event_val_1, uint16_t event_val_2, uint16_t event_val, float period, float frequency);
 
 void USER_LCD_Init(void);
+
+void convert2char(float f1, float f2, int sofa, char *oString);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -77,13 +81,14 @@ int main(void)
   float voltage = 0.0; //Variable to convert values to float
 
   uint16_t event_val = 0, event_val_2 = 0, event_val_1 = 0; //Time in bits (Flow sensor)
-  float period = 0, frequency = 0; //Variable to convert time to float
+  float period = 0.0, frequency = 0.0; //Variable to convert time to float
 
   int state = 2; //1 -> Idle, 2 -> Start, 3 -> Flow, A(12) -> pressure, 4 -> Both
   int stateprev = 2;
 
-  char data_char[25];
-  uint8_t data_uint8[25];
+  int sofa = 10;
+  char data_char[sofa*2 + 1];
+  uint8_t data_uint8[sofa*2 + 1];
   uint8_t test[] = "Test in Project\n";
 
   /* USER CODE END 1 */
@@ -146,17 +151,16 @@ int main(void)
 		  //Flow Sensor, Timer Module(Capture Mode)
 		  frequency = USER_flow_sensor(event_val_1,event_val_2,event_val,period,frequency);
 
-		  char v_c[50]; //Creating chars for display LCD
-		  char v_c2[50]="Psi: ";
+		  char v_c[30]; //Creating chars for display LCD
+		  char v_c2[30]="Psi: ";
 		  char f_c[50];
 		  sprintf(v_c, "%f", voltage);
 		  sprintf(f_c, "%f", frequency);
 		  strcat(v_c2,v_c);
 
-		  //printf(data_char, "%.6f,%.6f\n", voltage, frequency); //Creating chars for UART
-		  sprintf(data_char, "%d,%d\n", (int)voltage*1e+06,(int)frequency*1e+06 ); //Creating chars for UART
+		  convert2char(voltage, frequency, sofa, data_char);
 		  // Convert char array to uint8_t array
-		  for (int i = 0; data_char[i] != '\n'; i++) {
+		  for (int i = 0; i<sizeof(data_char); i++) {
 			  data_uint8[i] = (uint8_t)data_char[i];
 		  }
 
@@ -309,6 +313,95 @@ void USER_LCD_Init(void){
 	LCD_Set_Cursor(1,0);
 	LCD_Put_Str("IDLE");
 }
+
+void convert2char(float f1, float f2, int sofa, char *oString) {
+
+  char c1[sofa];
+  char c2[sofa];
+
+  char c3[sofa + 1];
+
+  sprintf(c1, "%3.6f", f1);
+  sprintf(c2, "%3.6f", f2);
+
+  if (c2[3] != '.') {
+    char temp;
+    for (int i = sizeof(c2) - 1; i >= 2; i--) {
+      temp = c2[i - 2];
+      c2[i] = temp;
+    }
+    c2[0] = '0';
+    c2[1] = '0';
+  }
+  if (c1[3] != '.') {
+    char temp;
+    for (int i = sizeof(c1) - 1; i >= 0; i--) {
+      temp = c1[i - 2];
+      c1[i] = temp;
+    }
+    c1[0] = '0';
+    c1[1] = '0';
+  }
+
+  strcpy(c3, c1); // Adding comma after f1
+  strcat(c3, ",");
+
+  strcpy(oString, c3); // Adding f2 after f1,
+  strcat(oString, c2);
+
+  printf("\n");
+}
+
+void outputInLCD(int stateprev, float voltage, float frequency){
+	char v_c[30]; //Creating chars for display LCD
+	char v_c2[30]="Psi: ";
+	char f_c[30];
+	sprintf(v_c, "%f", voltage);
+	sprintf(f_c, "%f", frequency);
+	strcat(v_c2,v_c);
+
+	switch(stateprev){
+	case 1:
+		LCD_Clear();
+		LCD_Set_Cursor(1,0);
+		LCD_Put_Str("IDLE");
+		break;
+
+	case 2 || 4:
+		LCD_Clear();
+		LCD_Set_Cursor(1,0);
+		LCD_Put_Str("Fx: ");
+		LCD_Set_Cursor(1,5);
+		LCD_Put_Str(f_c);
+		LCD_Set_Cursor(2,0);
+		LCD_Put_Str(v_c2);
+		break;
+
+	case 3:
+		LCD_Clear();
+		LCD_Set_Cursor(1,0);
+		LCD_Put_Str("FLux:");
+		LCD_Set_Cursor(2,0);
+		LCD_Put_Str(f_c);
+		break;
+
+	case 12:
+		LCD_Clear();
+		LCD_Set_Cursor(1,0);
+		LCD_Put_Str("Pressure:");
+		LCD_Set_Cursor(2,0);
+		LCD_Put_Str(v_c);
+		break;
+
+	default:
+		LCD_Clear();
+		LCD_Set_Cursor(1,0);
+		LCD_Put_Str("IDLE");
+		break;
+
+	}
+}
+
 /* USER CODE END 4 */
 
 /**
