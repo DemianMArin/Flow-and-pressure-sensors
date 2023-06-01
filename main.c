@@ -24,6 +24,8 @@
 
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h> //For random
+#include <time.h> //For random
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 
@@ -56,13 +58,13 @@ static void MX_GPIO_Init(void);
 /* USER CODE BEGIN PFP */
 void USER_RCC_Init(void);
 void USER_GPIO_Init(void);
-
-float USER_pressure_sensor(uint16_t dataADC, float voltage);
-float USER_flow_sensor(uint16_t event_val_1, uint16_t event_val_2, uint16_t event_val, float period, float frequency);
-
 void USER_LCD_Init(void);
 
-void convert2char(float f1, float f2, int sofa, char *oString);
+float USER_pressure_sensor(uint16_t dataADC, float voltage); //Data recovery functions
+float USER_flow_sensor(uint16_t event_val_1, uint16_t event_val_2, uint16_t event_val, float period, float frequency);
+
+void convert2char(float f1, float f2, int sofa, char *oString); //Interface functions
+void outputInLCD(int stateprev, float voltage, float frequency);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -77,6 +79,8 @@ void convert2char(float f1, float f2, int sofa, char *oString);
 int main(void)
 {
   /* USER CODE BEGIN 1 */
+	srand(time(NULL));
+
   uint16_t dataADC = 0; //Voltage in bits from (pressure sensor)
   float voltage = 0.0; //Variable to convert values to float
 
@@ -86,7 +90,7 @@ int main(void)
   int state = 2; //1 -> Idle, 2 -> Start, 3 -> Flow, A(12) -> pressure, 4 -> Both
   int stateprev = 2;
 
-  int sofa = 10;
+  int sofa = 10; //Variables for UART micro-rasp
   char data_char[sofa*2 + 1];
   uint8_t data_uint8[sofa*2 + 1];
   uint8_t test[] = "Test in Project\n";
@@ -133,67 +137,37 @@ int main(void)
   {
     /* USER CODE END WHILE */
 
-	  state = USER_MXKeyboard_SelectKey();
-	  if (state!=2){
-		  stateprev=state;
-	  }
+	  state = USER_MXKeyboard_SelectKey(); //Input of keypad buttons
+	  if (state!=2) stateprev=state;
+
 	  if (stateprev == 1){
-		  LCD_Clear();
-		  LCD_Set_Cursor(1,0);
-		  LCD_Put_Str("IDLE");
+		  outputInLCD(stateprev,voltage,frequency);
 	  }
 	  else if(stateprev == 2 || stateprev == 3 || stateprev == 12 || stateprev == 4){
 		  printf("\n");
 
-		  //Pressure Sensor, ADC
-		  voltage = USER_pressure_sensor(dataADC, voltage);
+//		  //Pressure Sensor, ADC
+//		  voltage = USER_pressure_sensor(dataADC, voltage);
+//
+//		  //Flow Sensor, Timer Module(Capture Mode)
+//		  frequency = USER_flow_sensor(event_val_1,event_val_2,event_val,period,frequency);
 
-		  //Flow Sensor, Timer Module(Capture Mode)
-		  frequency = USER_flow_sensor(event_val_1,event_val_2,event_val,period,frequency);
+		  voltage = (float)rand() / RAND_MAX * 100; //Random values for testing
+		  frequency = (float)rand() / RAND_MAX * 100;
 
-		  char v_c[30]; //Creating chars for display LCD
-		  char v_c2[30]="Psi: ";
-		  char f_c[50];
-		  sprintf(v_c, "%f", voltage);
-		  sprintf(f_c, "%f", frequency);
-		  strcat(v_c2,v_c);
 
+		  //Convert float to char array
 		  convert2char(voltage, frequency, sofa, data_char);
 		  // Convert char array to uint8_t array
-		  for (int i = 0; i<sizeof(data_char); i++) {
-			  data_uint8[i] = (uint8_t)data_char[i];
-		  }
+		  for (int i = 0; i<sizeof(data_char); i++) data_uint8[i] = (uint8_t)data_char[i];
 
-
-		  if(stateprev == 3){
-			  LCD_Clear();
-			  LCD_Set_Cursor(1,0);
-			  LCD_Put_Str("FLux:");
-			  LCD_Set_Cursor(2,0);
-			  LCD_Put_Str(f_c);
-		  }
-		  if(stateprev == 12){
-			  LCD_Clear();
-			  LCD_Set_Cursor(1,0);
-			  LCD_Put_Str("Pressure:");
-			  LCD_Set_Cursor(2,0);
-			  LCD_Put_Str(v_c);
-		  }
-		  if(stateprev == 4 || stateprev == 2){
-			  LCD_Clear();
-			  LCD_Set_Cursor(1,0);
-			  LCD_Put_Str("Fx: ");
-			  LCD_Set_Cursor(1,5);
-			  LCD_Put_Str(f_c);
-			  LCD_Set_Cursor(2,0);
-			  LCD_Put_Str(v_c2);
-		  }
+		  //Output LCD depending on button pressed in matrix keypad
+		  outputInLCD(stateprev,voltage,frequency);
 
 		  //Timer, Timer Module(Timer Mode)
 		  USER_USART3_Transmit(data_uint8,sizeof(data_uint8));
-		  //USER_USART3_Transmit(test,sizeof(test));
 		  printf("Wait 1000ms\r\n");
-		  USER_TIMER3_TIMER_Init();
+		  USER_TIMER3_TIMER_Init(); //1000ms
 	  }
 
 
@@ -315,7 +289,8 @@ void USER_LCD_Init(void){
 }
 
 void convert2char(float f1, float f2, int sofa, char *oString) {
-
+  int posp1 = 0;
+  int posp2 = 0;
   char c1[sofa];
   char c2[sofa];
 
@@ -324,24 +299,51 @@ void convert2char(float f1, float f2, int sofa, char *oString) {
   sprintf(c1, "%3.6f", f1);
   sprintf(c2, "%3.6f", f2);
 
-  if (c2[3] != '.') {
-    char temp;
-    for (int i = sizeof(c2) - 1; i >= 2; i--) {
-      temp = c2[i - 2];
-      c2[i] = temp;
+  for (int i = 0; i < sizeof(c1); i++) {
+    if (c1[i] == '.') {
+      posp1 = i;
     }
-    c2[0] = '0';
-    c2[1] = '0';
   }
+  for (int i = 0; i < sizeof(c2); i++) {
+    if (c2[i] == '.') {
+      posp2 = i;
+    }
+  }
+
+
   if (c1[3] != '.') {
     char temp;
     for (int i = sizeof(c1) - 1; i >= 0; i--) {
-      temp = c1[i - 2];
+      temp = c1[i - (3 - posp1)];
       c1[i] = temp;
     }
-    c1[0] = '0';
-    c1[1] = '0';
+
+    if (posp1 == 2) {
+      c1[0] = '0';
+    }
+    if (posp1 == 1) {
+      c1[0] = '0';
+      c1[1] = '0';
+    }
   }
+
+  if (c2[3] != '.') {
+    char temp;
+    for (int i = sizeof(c2) - 1; i >= 2; i--) {
+      temp = c2[i - (3 - posp2)];
+      c2[i] = temp;
+    }
+
+    if (posp2 == 2) {
+      c2[0] = '0';
+    }
+    if (posp2 == 1) {
+      c2[0] = '0';
+      c2[1] = '0';
+    }
+
+  }
+
 
   strcpy(c3, c1); // Adding comma after f1
   strcat(c3, ",");
@@ -367,7 +369,8 @@ void outputInLCD(int stateprev, float voltage, float frequency){
 		LCD_Put_Str("IDLE");
 		break;
 
-	case 2 || 4:
+	case 2:
+	case 4:
 		LCD_Clear();
 		LCD_Set_Cursor(1,0);
 		LCD_Put_Str("Fx: ");
