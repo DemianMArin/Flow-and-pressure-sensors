@@ -63,7 +63,7 @@ void USER_LCD_Init(void);
 float USER_pressure_sensor(uint16_t dataADC, float voltage); //Data recovery functions
 float USER_flow_sensor(uint16_t event_val_1, uint16_t event_val_2, uint16_t event_val, float period, float frequency);
 
-void convert2char(float f1, float f2, int sofa, char *oString); //Interface functions
+void convert2char(float f1, float f2, char *result); //Interface functions
 void outputInLCD(int stateprev, float voltage, float frequency);
 /* USER CODE END PFP */
 
@@ -90,9 +90,9 @@ int main(void)
   int state = 2; //1 -> Idle, 2 -> Start, 3 -> Flow, A(12) -> pressure, 4 -> Both
   int stateprev = 2;
 
-  int sofa = 10; //Variables for UART micro-rasp
-  char data_char[sofa*2 + 1];
-  uint8_t data_uint8[sofa*2 + 1];
+  int sofa = 20; //Variables for UART micro-rasp
+  char data_char[sofa];
+  uint8_t data_uint8[sofa];
   uint8_t test[] = "Test in Project\n";
 
   /* USER CODE END 1 */
@@ -157,7 +157,7 @@ int main(void)
 
 
 		  //Convert float to char array
-		  convert2char(voltage, frequency, sofa, data_char);
+		  convert2char(voltage, frequency, data_char);
 		  // Convert char array to uint8_t array
 		  for (int i = 0; i<sizeof(data_char); i++) data_uint8[i] = (uint8_t)data_char[i];
 
@@ -288,70 +288,9 @@ void USER_LCD_Init(void){
 	LCD_Put_Str("IDLE");
 }
 
-void convert2char(float f1, float f2, int sofa, char *oString) {
-  int posp1 = 0;
-  int posp2 = 0;
-  char c1[sofa];
-  char c2[sofa];
-
-  char c3[sofa + 1];
-
-  sprintf(c1, "%3.6f", f1);
-  sprintf(c2, "%3.6f", f2);
-
-  for (int i = 0; i < sizeof(c1); i++) {
-    if (c1[i] == '.') {
-      posp1 = i;
-    }
-  }
-  for (int i = 0; i < sizeof(c2); i++) {
-    if (c2[i] == '.') {
-      posp2 = i;
-    }
-  }
-
-
-  if (c1[3] != '.') {
-    char temp;
-    for (int i = sizeof(c1) - 1; i >= 0; i--) {
-      temp = c1[i - (3 - posp1)];
-      c1[i] = temp;
-    }
-
-    if (posp1 == 2) {
-      c1[0] = '0';
-    }
-    if (posp1 == 1) {
-      c1[0] = '0';
-      c1[1] = '0';
-    }
-  }
-
-  if (c2[3] != '.') {
-    char temp;
-    for (int i = sizeof(c2) - 1; i >= 2; i--) {
-      temp = c2[i - (3 - posp2)];
-      c2[i] = temp;
-    }
-
-    if (posp2 == 2) {
-      c2[0] = '0';
-    }
-    if (posp2 == 1) {
-      c2[0] = '0';
-      c2[1] = '0';
-    }
-
-  }
-
-
-  strcpy(c3, c1); // Adding comma after f1
-  strcat(c3, ",");
-
-  strcpy(oString, c3); // Adding f2 after f1,
-  strcat(oString, c2);
-
-  printf("\n");
+void convert2char(float f1, float f2, char *result) {
+	sprintf(result, "%03d.%06d,%03d.%06d", (int)f1, (int)(f1 * 1000000) % 1000000,
+	          (int)f2, (int)(f2 * 1000000) % 1000000);
 }
 
 void outputInLCD(int stateprev, float voltage, float frequency){
