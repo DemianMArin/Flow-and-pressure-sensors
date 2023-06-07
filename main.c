@@ -18,6 +18,7 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include "cmsis_os.h"
 #include "myprintf.h"
 #include "sensorConfig.h"
 #include "lcd.h"
@@ -26,6 +27,7 @@
 #include <stdio.h>
 #include <stdlib.h> //For random
 #include <time.h> //For random
+
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 
@@ -47,24 +49,40 @@
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
-
+//osThreadId defaultTaskHandle;
 /* USER CODE BEGIN PV */
+osThreadId measureTaskHandle; /*Tasks Handles*/
+osThreadId sendDataTaskHandle;
+osThreadId mxkeypadTaskHandle;
+osThreadId lcdTaskHandle;
 
+osMessageQId sendValuesQueueHandle; //T1->T2
+osMessageQId sendValuesLCDQueueHandle; //T1->T4
+osMessageQId sendButtonQueueHandle; //T3->T4
+osMessageQId confirmationQueueHandle; //T4->T3
+osMessageQId startMeasureQueueHandle; //T3->T1
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
+
+
 /* USER CODE BEGIN PFP */
-void USER_RCC_Init(void);
+void measureTask(void const * argument); //T1 /*Tasks */
+void sendDataTask(void const * argument); //T2
+void mxkeypadTask(void const * argument); //T3
+void lcdTask(void const * argument);	  //T4
+
+void USER_RCC_Init(void); /*Init of clocks, GPIO and LCD func*/
 void USER_GPIO_Init(void);
 void USER_LCD_Init(void);
 
-float USER_pressure_sensor(uint16_t dataADC, float voltage); //Data recovery functions
-float USER_flow_sensor(uint16_t event_val_1, uint16_t event_val_2, uint16_t event_val, float period, float frequency);
+void USER_pressure_sensor(uint16_t dataADC, float * voltage); /*Data recovery functions*/
+void USER_flow_sensor(uint16_t event_val_1, uint16_t event_val_2, uint16_t event_val, float * frequency);
 
-void convert2char(float f1, float f2, char *result); //Interface functions
-void outputInLCD(int stateprev, float voltage, float frequency);
+void convert2char(float f1, float f2, char *result); /*Interface functions*/
+void outputInLCD(int stateprev, char * measurement);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -80,21 +98,6 @@ int main(void)
 {
   /* USER CODE BEGIN 1 */
 	srand(time(NULL));
-
-  uint16_t dataADC = 0; //Voltage in bits from (pressure sensor)
-  float voltage = 0.0; //Variable to convert values to float
-
-  uint16_t event_val = 0, event_val_2 = 0, event_val_1 = 0; //Time in bits (Flow sensor)
-  float period = 0.0, frequency = 0.0; //Variable to convert time to float
-
-  int state = 2; //1 -> Idle, 2 -> Start, 3 -> Flow, A(12) -> pressure, 4 -> Both
-  int stateprev = 2;
-
-  int sofa = 20; //Variables for UART micro-rasp
-  char data_char[sofa];
-  uint8_t data_uint8[sofa];
-  uint8_t test[] = "Test in Project\n";
-
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
@@ -125,51 +128,60 @@ int main(void)
   USER_ADC_Calibration();
   USER_TIMER2_Capture_Init(); //Timer (Capture mode)
   USER_LCD_Init(); //Matrix Keyboard
+  printf("Starting...\r\n");
   /* USER CODE END 2 */
 
+  /* USER CODE BEGIN RTOS_MUTEX */
+  /* add mutexes, ... */
+  /* USER CODE END RTOS_MUTEX */
+
+  /* USER CODE BEGIN RTOS_SEMAPHORES */
+  /* add semaphores, ... */
+  /* USER CODE END RTOS_SEMAPHORES */
+
+  /* USER CODE BEGIN RTOS_TIMERS */
+  /* start timers, add new ones, ... */
+  /* USER CODE END RTOS_TIMERS */
+
+  /* USER CODE BEGIN RTOS_QUEUES */
+  osMessageQDef(sendValues, 1, uint32_t);
+  sendValuesQueueHandle = osMessageCreate(osMessageQ(sendValues), NULL);
+  osMessageQDef(sendButton, 1, uint32_t);
+  sendButtonQueueHandle = osMessageCreate(osMessageQ(sendButton), NULL);
+  osMessageQDef(confirmation, 1, uint32_t);
+  confirmationQueueHandle = osMessageCreate(osMessageQ(confirmation), NULL);
+  osMessageQDef(startMeasure, 1, uint32_t);
+  startMeasureQueueHandle = osMessageCreate(osMessageQ(startMeasure), NULL);
+  osMessageQDef(sendValuesLCD, 1, uint32_t);
+  sendValuesLCDQueueHandle = osMessageCreate(osMessageQ(sendValuesLCD), NULL);
+  /* USER CODE END RTOS_QUEUES */
+
+  /* Create the thread(s) */
+  /* definition and creation of defaultTask */
+//  osThreadDef(defaultTask, StartDefaultTask, osPriorityIdle, 0, 128);
+//  defaultTaskHandle = osThreadCreate(osThread(defaultTask), NULL);
+
+  /* USER CODE BEGIN RTOS_THREADS */
+  osThreadDef(Task1, measureTask, osPriorityNormal, 0, 128);
+  measureTaskHandle = osThreadCreate(osThread(Task1), NULL);
+  osThreadDef(Task2, sendDataTask, osPriorityNormal, 0, 128);
+  sendDataTaskHandle = osThreadCreate(osThread(Task2), NULL);
+  osThreadDef(Task3, mxkeypadTask, osPriorityNormal, 0, 128);
+  mxkeypadTaskHandle = osThreadCreate(osThread(Task3), NULL);
+  osThreadDef(Task4, lcdTask, osPriorityNormal, 0, 128);
+  lcdTaskHandle = osThreadCreate(osThread(Task4), NULL);
+
+  /* USER CODE END RTOS_THREADS */
+
+  /* Start scheduler */
+
+  osKernelStart();
+  /* We should never get here as control is now taken by the scheduler */
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-
-
-  ADC1->CR2	|=	 ADC_CR2_ADON;//	Starts the conversion of ADC
-  printf("Idle");
   while (1)
   {
     /* USER CODE END WHILE */
-
-	  state = USER_MXKeyboard_SelectKey(); //Input of keypad buttons
-	  if (state!=2) stateprev=state;
-
-	  if (stateprev == 1){
-		  outputInLCD(stateprev,voltage,frequency);
-	  }
-	  else if(stateprev == 2 || stateprev == 3 || stateprev == 12 || stateprev == 4){
-		  printf("\n");
-
-//		  //Pressure Sensor, ADC
-//		  voltage = USER_pressure_sensor(dataADC, voltage);
-//
-//		  //Flow Sensor, Timer Module(Capture Mode)
-//		  frequency = USER_flow_sensor(event_val_1,event_val_2,event_val,period,frequency);
-
-		  voltage = (float)rand() / RAND_MAX * 100; //Random values for testing
-		  frequency = (float)rand() / RAND_MAX * 100;
-
-
-		  //Convert float to char array
-		  convert2char(voltage, frequency, data_char);
-		  // Convert char array to uint8_t array
-		  for (int i = 0; i<sizeof(data_char); i++) data_uint8[i] = (uint8_t)data_char[i];
-
-		  //Output LCD depending on button pressed in matrix keypad
-		  outputInLCD(stateprev,voltage,frequency);
-
-		  //Timer, Timer Module(Timer Mode)
-		  USER_USART3_Transmit(data_uint8,sizeof(data_uint8));
-		  printf("Wait 1000ms\r\n");
-		  USER_TIMER3_TIMER_Init(); //1000ms
-	  }
-
 
     /* USER CODE BEGIN 3 */
   }
@@ -257,28 +269,29 @@ void USER_GPIO_Init(void){
 	USER_ADC_GPIO_Init(); //ADC
 	USER_TIMER2_CAPTUREMODE_GPIO_Init(); //Timer (Capture Mode)
 }
-float USER_pressure_sensor(uint16_t dataADC, float voltage){
+void USER_pressure_sensor(uint16_t dataADC, float *voltage){
   dataADC = USER_ADC_Read();
-  voltage = (3.3)*((float)dataADC/4095);
-  printf("Voltage: %.2f \r\n",voltage);
-  return voltage;
+  *voltage = (3.3)*((float)dataADC/4095);
+//  printf("Voltage: %.2f \r\n",voltage);
+//  return voltage;
 }
 
-float USER_flow_sensor(uint16_t event_val_1, uint16_t event_val_2, uint16_t event_val, float period, float frequency){
+void USER_flow_sensor(uint16_t event_val_1, uint16_t event_val_2, uint16_t event_val, float * frequency){
+	float period = 0;
 	if(!(TIM2->SR & TIM_SR_CC1IF)){
 		period=0;
-		frequency=0;
+		*frequency=0;
 	}else{
 		event_val_1 = USER_TIMER2_Capture_Event();
 		event_val_2 = USER_TIMER2_Capture_Event();
 		event_val = event_val_2 - event_val_1;
 		period = ( 1.0 / 64000000.0 ) * event_val * (TIM2->PSC + 1);
-		frequency = 1/period;
+		*frequency = 1/period;
 	}
 
-	printf("Period: %.5f\r\n",period);
-	printf("Frequency: %.5f\r\n",frequency);
-	return frequency;
+//	printf("Period: %.5f\r\n",period);
+//	printf("Frequency: %.5f\r\n",frequency);
+//	return frequency;
 }
 
 void USER_LCD_Init(void){
@@ -293,13 +306,26 @@ void convert2char(float f1, float f2, char *result) {
 	          (int)f2, (int)(f2 * 1000000) % 1000000);
 }
 
-void outputInLCD(int stateprev, float voltage, float frequency){
-	char v_c[30]; //Creating chars for display LCD
-	char v_c2[30]="Psi: ";
-	char f_c[30];
-	sprintf(v_c, "%f", voltage);
-	sprintf(f_c, "%f", frequency);
-	strcat(v_c2,v_c);
+void outputInLCD(int stateprev, char * measurement){
+	char show[21] = "aaa.aaaaaa,bbb.bbbbbb";
+	char voltage_c[10]="333.333333"; //Creating chars for display LCD
+	char frequency_c[10]="444.444444";
+	char voltage_c2[15]="Psi: ";
+
+	memcpy(show, measurement, 22 * sizeof(uint8_t));
+	printf("lcdfunc %s\r\n",show);
+
+	char* token = strtok(show, ",");
+    if (token != NULL) {
+        strcpy(voltage_c, token);
+    }
+    token = strtok(NULL,",");
+    if (token != NULL) {
+		strcpy(frequency_c, token);
+	}
+    printf("%s\r\n",voltage_c);
+    printf("%s\r\n",frequency_c);
+	strcat(voltage_c2,voltage_c);
 
 	switch(stateprev){
 	case 1:
@@ -309,30 +335,13 @@ void outputInLCD(int stateprev, float voltage, float frequency){
 		break;
 
 	case 2:
-	case 4:
 		LCD_Clear();
 		LCD_Set_Cursor(1,0);
 		LCD_Put_Str("Fx: ");
 		LCD_Set_Cursor(1,5);
-		LCD_Put_Str(f_c);
+		LCD_Put_Str(frequency_c);
 		LCD_Set_Cursor(2,0);
-		LCD_Put_Str(v_c2);
-		break;
-
-	case 3:
-		LCD_Clear();
-		LCD_Set_Cursor(1,0);
-		LCD_Put_Str("FLux:");
-		LCD_Set_Cursor(2,0);
-		LCD_Put_Str(f_c);
-		break;
-
-	case 12:
-		LCD_Clear();
-		LCD_Set_Cursor(1,0);
-		LCD_Put_Str("Pressure:");
-		LCD_Set_Cursor(2,0);
-		LCD_Put_Str(v_c);
+		LCD_Put_Str(voltage_c2);
 		break;
 
 	default:
@@ -344,7 +353,179 @@ void outputInLCD(int stateprev, float voltage, float frequency){
 	}
 }
 
+void measureTask(void const * argument)
+{
+	uint32_t temp; /*Period variables*/
+	uint32_t counter = 0;
+	int delay = 250;
+	float voltage, frequency;/*Task variables*/
+	uint16_t dataADC = 0; //Voltage in bits from (pressure sensor)
+	uint16_t event_val = 0, event_val_2 = 0, event_val_1 = 0; //Time in bits (Flow sensor)
+	uint8_t msg[21] = "123.456789,987.654321";
+//	uint8_t msg2[21] = "123.456789,987.654321";
+	int start = 0;
+	osEvent r_event_start;
+	ADC1->CR2	|=	 ADC_CR2_ADON;//	Starts the conversion of ADC
+	for(;;)
+	{
+//		printf("Task1\r\n");
+		r_event_start = osMessageGet(startMeasureQueueHandle, 0); //Receiving values measured
+		if (r_event_start.status == osEventMessage){
+			start = r_event_start.value.v;
+		}
+		while(start == 1){
+//			printf("Inwhile\r\n");
+			USER_pressure_sensor(dataADC, &voltage); //Pressure Sensor, ADC
+			USER_flow_sensor(event_val_1,event_val_2,event_val,&frequency);//Flow Sensor, Timer Module(Capture Mode)
+//			voltage = (float)rand() / RAND_MAX * 100; //Random values for testing
+//			frequency = (float)rand() / RAND_MAX * 100;
+			convert2char(voltage, frequency, msg);//Convert values into char array
+//			convert2char(voltage, frequency, msg2);//Convert values into char array
+			if( osMessagePut(sendValuesQueueHandle, msg, 0) != osOK ){} //Send data to uart
+			if( osMessagePut(sendValuesLCDQueueHandle, msg, 0) != osOK ){} //Send data to lcd
+		}
+		temp = osKernelSysTick() - (delay*counter++);
+		osDelay(delay-temp);
+	}
+}
+
+void sendDataTask(void const * argument)
+{
+	uint32_t temp;/*Period variables*/
+	int delay = 250;
+	uint32_t counter = 0;
+	osEvent r_event_values;/*Task variables*/
+	uint8_t inputValues[21] = "000.000000,000.000000";
+	for(;;)
+	{
+//		printf("Task2\r\n");
+		r_event_values = osMessageGet(sendValuesQueueHandle, 0); //Receiving values measured
+		if (r_event_values.status == osEventMessage){
+//			memcpy(inputValues, (uint8_t*)r_event_values.value.p, 21 * sizeof(uint8_t));
+//			printf("sendTask\r\n");
+//			printf("%s\r\n",(uint8_t*)r_event_values.value.p);
+			USER_USART3_Transmit(r_event_values.value.p,21 * sizeof(uint8_t));
+		}
+		temp = osKernelSysTick() - (delay*counter++);
+		osDelay(delay-temp);
+	}
+
+}
+
+void mxkeypadTask(void const * argument)
+{
+	uint32_t temp;/*Period variables*/
+	int delay = 250;
+	uint32_t counter = 0;
+	int key = 2;/*Task variables*/
+	int counterStart = 0;
+	uint32_t msg = 0;
+	uint32_t input = 1;
+	osEvent r_event;
+	for(;;)
+	{
+		key = USER_MXKeyboard_SelectKey(); //Obtaining key
+		msg = key;
+		if (key == 1 && counterStart <= 0){ //Sending start message only once
+			counterStart++;
+			if( osMessagePut(startMeasureQueueHandle, msg, 0) != osOK ){}
+		}
+
+//		if( osMessagePut(sendButtonQueueHandle, msg, 0) != osOK ){} //Sending button pressed
+//		while(input == 0){						//Receiving acknowledgement
+//			r_event = osMessageGet(confirmationQueueHandle, 0);
+//			if( r_event.status == osEventMessage ){
+//				input = r_event.value.v;
+//			}else{
+//			}
+//		}
+
+		temp = osKernelSysTick() - (delay*counter++);
+		osDelay(delay-temp);
+	}
+}
+
+void lcdTask(void const * argument)
+{
+	uint32_t temp;/*Period variables*/
+	int delay = 250;
+	uint32_t counter = 0;
+	osEvent r_event;/*Task variables*/
+	osEvent r_event_values;
+	uint32_t inputButton = 1;
+	int lcdState = 2;
+	int counterStart = 0;
+	uint8_t inputValues[21] = "111.111111,222.222222";
+	uint32_t output = 1;
+	for(;;)
+	{
+		printf("Task3\r\n");
+//		r_event = osMessageGet(sendButtonQueueHandle, 0); //Receiving button pressed
+//		if( r_event.status == osEventMessage ){
+//			output = 1;
+//			if(r_event.value.v == 1 && counterStart <=0) { //Receive start only once
+//				counterStart++;
+//				inputButton = r_event.value.v;
+//				lcdState = 4;
+//			}
+//		}else{
+//			output = 0;
+//		}
+//
+		r_event_values = osMessageGet(sendValuesLCDQueueHandle, 0); //Receiving values measured
+		if (r_event_values.status == osEventMessage){
+			memcpy(inputValues, (uint8_t*)r_event_values.value.p, 21 * sizeof(uint8_t));
+			printf("lcdT: %s\r\n",(uint8_t*)r_event_values.value.p);
+		}
+
+//		outputInLCD(lcdState, inputValues);
+
+//		if( osMessagePut(confirmationQueueHandle, output, 0) != osOK ){}
+
+		temp = osKernelSysTick() - (delay*counter++);
+		osDelay(delay-temp);
+	}
+}
 /* USER CODE END 4 */
+
+/* USER CODE BEGIN Header_StartDefaultTask */
+/**
+  * @brief  Function implementing the defaultTask thread.
+  * @param  argument: Not used
+  * @retval None
+  */
+/* USER CODE END Header_StartDefaultTask */
+void StartDefaultTask(void const * argument)
+{
+  /* USER CODE BEGIN 5 */
+  /* Infinite loop */
+  for(;;)
+  {
+    osDelay(1);
+  }
+  /* USER CODE END 5 */
+}
+
+/**
+  * @brief  Period elapsed callback in non blocking mode
+  * @note   This function is called  when TIM4 interrupt took place, inside
+  * HAL_TIM_IRQHandler(). It makes a direct call to HAL_IncTick() to increment
+  * a global variable "uwTick" used as application time base.
+  * @param  htim : TIM handle
+  * @retval None
+  */
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
+{
+  /* USER CODE BEGIN Callback 0 */
+
+  /* USER CODE END Callback 0 */
+  if (htim->Instance == TIM4) {
+    HAL_IncTick();
+  }
+  /* USER CODE BEGIN Callback 1 */
+
+  /* USER CODE END Callback 1 */
+}
 
 /**
   * @brief  This function is executed in case of error occurrence.
