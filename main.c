@@ -51,10 +51,10 @@
 /* Private variables ---------------------------------------------------------*/
 //osThreadId defaultTaskHandle;
 /* USER CODE BEGIN PV */
-osThreadId measureTaskHandle; /*Tasks Handles*/
-osThreadId sendDataTaskHandle;
-osThreadId mxkeypadTaskHandle;
-osThreadId lcdTaskHandle;
+osThreadId measureTaskHandle; //T1/*Tasks Handles*/
+osThreadId sendDataTaskHandle; //T2
+osThreadId mxkeypadTaskHandle; //T3
+osThreadId lcdTaskHandle; //T4
 
 osMessageQId sendValuesQueueHandle; //T1->T2
 osMessageQId sendValuesLCDQueueHandle; //T1->T4
@@ -162,13 +162,13 @@ int main(void)
 //  defaultTaskHandle = osThreadCreate(osThread(defaultTask), NULL);
 
   /* USER CODE BEGIN RTOS_THREADS */
-  osThreadDef(Task1, measureTask, osPriorityNormal, 0, 128);
+  osThreadDef(Task1, measureTask, osPriorityNormal, 0, 256);
   measureTaskHandle = osThreadCreate(osThread(Task1), NULL);
   osThreadDef(Task2, sendDataTask, osPriorityNormal, 0, 128);
   sendDataTaskHandle = osThreadCreate(osThread(Task2), NULL);
   osThreadDef(Task3, mxkeypadTask, osPriorityNormal, 0, 128);
   mxkeypadTaskHandle = osThreadCreate(osThread(Task3), NULL);
-  osThreadDef(Task4, lcdTask, osPriorityNormal, 0, 128);
+  osThreadDef(Task4, lcdTask, osPriorityNormal, 0, 256);
   lcdTaskHandle = osThreadCreate(osThread(Task4), NULL);
 
   /* USER CODE END RTOS_THREADS */
@@ -448,7 +448,7 @@ void mxkeypadTask(void const * argument)
 void lcdTask(void const * argument)
 {
 	uint32_t temp;/*Period variables*/
-	int delay = 250;
+	int delay = 1000;
 	uint32_t counter = 0;
 	osEvent r_event;/*Task variables*/
 	osEvent r_event_values;
@@ -474,11 +474,11 @@ void lcdTask(void const * argument)
 //
 		r_event_values = osMessageGet(sendValuesLCDQueueHandle, 0); //Receiving values measured
 		if (r_event_values.status == osEventMessage){
-			memcpy(inputValues, (uint8_t*)r_event_values.value.p, 21 * sizeof(uint8_t));
+//			memcpy(inputValues, (uint8_t*)r_event_values.value.p, 21 * sizeof(uint8_t));
 			printf("lcdT: %s\r\n",(uint8_t*)r_event_values.value.p);
+			outputInLCD(lcdState, r_event_values.value.p);
 		}
 
-//		outputInLCD(lcdState, inputValues);
 
 //		if( osMessagePut(confirmationQueueHandle, output, 0) != osOK ){}
 
