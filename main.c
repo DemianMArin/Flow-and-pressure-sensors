@@ -22,6 +22,7 @@
 #include "myprintf.h"
 #include "sensorConfig.h"
 #include "lcd.h"
+#include "hx711.h"
 
 #include <string.h>
 #include <stdio.h>
@@ -55,12 +56,17 @@ osThreadId measureTaskHandle; //T1/*Tasks Handles*/
 osThreadId sendDataTaskHandle; //T2
 osThreadId mxkeypadTaskHandle; //T3
 osThreadId lcdTaskHandle; //T4
+osThreadId weightSensorHandle; //T5 (extra)
+osThreadId testTaskHandle; //T6 (extra)
 
 osMessageQId sendValuesQueueHandle; //T1->T2
 osMessageQId sendValuesLCDQueueHandle; //T1->T4
 osMessageQId sendButtonQueueHandle; //T3->T4
 osMessageQId confirmationQueueHandle; //T4->T3
 osMessageQId startMeasureQueueHandle; //T3->T1
+osMessageQId weightDataQueueHandle; //T5->T1
+
+hx711_t loadcell;/*Weight sensor variables*/
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -73,6 +79,8 @@ void measureTask(void const * argument); //T1 /*Tasks */
 void sendDataTask(void const * argument); //T2
 void mxkeypadTask(void const * argument); //T3
 void lcdTask(void const * argument);	  //T4
+void weightTask(void const * argument); //T5 (extra)
+void testTask(void const * argument);
 
 void USER_RCC_Init(void); /*Init of clocks, GPIO and LCD func*/
 void USER_GPIO_Init(void);
@@ -98,6 +106,7 @@ int main(void)
 {
   /* USER CODE BEGIN 1 */
 	srand(time(NULL));
+
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
@@ -128,6 +137,13 @@ int main(void)
   USER_ADC_Calibration();
   USER_TIMER2_Capture_Init(); //Timer (Capture mode)
   USER_LCD_Init(); //Matrix Keyboard
+  loadcell.lock=0; //Weight sensor
+  loadcell.offset=0;
+  hx711_init(&loadcell, GPIOC, GPIO_PIN_3, GPIOC, GPIO_PIN_2); //3 clk, 2 pin
+  hx711_coef_set(&loadcell, 500); // read after calibration //min 3750, max 3900-3950  354.5
+  hx711_tare(&loadcell, 10);/*morado 5v, negro ground, blanco data, gris clk*/
+
+
   printf("Starting...\r\n");
   /* USER CODE END 2 */
 
@@ -154,6 +170,8 @@ int main(void)
   startMeasureQueueHandle = osMessageCreate(osMessageQ(startMeasure), NULL);
   osMessageQDef(sendValuesLCD, 1, uint32_t);
   sendValuesLCDQueueHandle = osMessageCreate(osMessageQ(sendValuesLCD), NULL);
+  osMessageQDef(weightValues, 1, uint32_t);
+  weightDataQueueHandle = osMessageCreate(osMessageQ(weightValues), NULL);
   /* USER CODE END RTOS_QUEUES */
 
   /* Create the thread(s) */
@@ -166,15 +184,18 @@ int main(void)
   measureTaskHandle = osThreadCreate(osThread(Task1), NULL);
   osThreadDef(Task2, sendDataTask, osPriorityNormal, 0, 128);
   sendDataTaskHandle = osThreadCreate(osThread(Task2), NULL);
-  osThreadDef(Task3, mxkeypadTask, osPriorityNormal, 0, 128);
-  mxkeypadTaskHandle = osThreadCreate(osThread(Task3), NULL);
-  osThreadDef(Task4, lcdTask, osPriorityNormal, 0, 256);
-  lcdTaskHandle = osThreadCreate(osThread(Task4), NULL);
+//  osThreadDef(Task3, mxkeypadTask, osPriorityNormal, 0, 128);
+//  mxkeypadTaskHandle = osThreadCreate(osThread(Task3), NULL);
+//  osThreadDef(Task4, lcdTask, osPriorityNormal, 0, 256);
+//  lcdTaskHandle = osThreadCreate(osThread(Task4), NULL);
+  osThreadDef(Task5, weightTask, osPriorityNormal, 0, 256);
+  weightSensorHandle = osThreadCreate(osThread(Task5), NULL);
+//  osThreadDef(Task6, testTask, osPriorityNormal, 0, 384);
+//  testTaskHandle = osThreadCreate(osThread(Task6), NULL);
 
   /* USER CODE END RTOS_THREADS */
 
   /* Start scheduler */
-
   osKernelStart();
   /* We should never get here as control is now taken by the scheduler */
   /* Infinite loop */
@@ -250,6 +271,7 @@ static void MX_GPIO_Init(void)
 void USER_RCC_Init(void){
 	RCC->APB2ENR	|=	 RCC_APB2ENR_IOPAEN;// I/O port A clock enable
 	RCC->APB2ENR	|=	 RCC_APB2ENR_IOPBEN;// I/O port B clock enable
+	RCC->APB2ENR	|=	 RCC_APB2ENR_IOPCEN;// I/O port C clock enable
 
 	USER_TIMER2_RCC_Init(); // TIMER2 clock enable
 	USER_TIMER3_RCC_Init(); //TIMER3 clock enable
@@ -268,6 +290,7 @@ void USER_GPIO_Init(void){
 	USER_MATRIXKEYPAD_GPIO_Init(); //Matrix Keypad
 	USER_ADC_GPIO_Init(); //ADC
 	USER_TIMER2_CAPTUREMODE_GPIO_Init(); //Timer (Capture Mode)
+	USER_GPIO_Init_Valve_WaterPump(); //Valve in, out and water pump
 }
 void USER_pressure_sensor(uint16_t dataADC, float *voltage){
   dataADC = USER_ADC_Read();
@@ -278,16 +301,16 @@ void USER_pressure_sensor(uint16_t dataADC, float *voltage){
 
 void USER_flow_sensor(uint16_t event_val_1, uint16_t event_val_2, uint16_t event_val, float * frequency){
 	float period = 0;
-	if(!(TIM2->SR & TIM_SR_CC1IF)){
-		period=0;
-		*frequency=0;
-	}else{
+//	if(!(TIM2->SR & TIM_SR_CC1IF)){
+//		period=0;
+//		*frequency=0;
+//	}else{
 		event_val_1 = USER_TIMER2_Capture_Event();
 		event_val_2 = USER_TIMER2_Capture_Event();
 		event_val = event_val_2 - event_val_1;
 		period = ( 1.0 / 64000000.0 ) * event_val * (TIM2->PSC + 1);
 		*frequency = 1/period;
-	}
+//	}
 
 //	printf("Period: %.5f\r\n",period);
 //	printf("Frequency: %.5f\r\n",frequency);
@@ -313,7 +336,7 @@ void outputInLCD(int stateprev, char * measurement){
 	char voltage_c2[15]="Psi: ";
 
 	memcpy(show, measurement, 22 * sizeof(uint8_t));
-	printf("lcdfunc %s\r\n",show);
+//	printf("lcdfunc %s\r\n",show);
 
 	char* token = strtok(show, ",");
     if (token != NULL) {
@@ -323,8 +346,8 @@ void outputInLCD(int stateprev, char * measurement){
     if (token != NULL) {
 		strcpy(frequency_c, token);
 	}
-    printf("%s\r\n",voltage_c);
-    printf("%s\r\n",frequency_c);
+//    printf("%s\r\n",voltage_c);
+//    printf("%s\r\n",frequency_c);
 	strcat(voltage_c2,voltage_c);
 
 	switch(stateprev){
@@ -361,28 +384,30 @@ void measureTask(void const * argument)
 	float voltage, frequency;/*Task variables*/
 	uint16_t dataADC = 0; //Voltage in bits from (pressure sensor)
 	uint16_t event_val = 0, event_val_2 = 0, event_val_1 = 0; //Time in bits (Flow sensor)
-	uint8_t msg[21] = "123.456789,987.654321";
-//	uint8_t msg2[21] = "123.456789,987.654321";
-	int start = 0;
-	osEvent r_event_start;
+	uint8_t msg[21] = "123.456789,987.654321"; //message for other tasks
+	int start = 1; //Control flow variable (start measure)
+	osEvent r_event_start; //Event for receiving button
+	osEvent r_event_weight; //Event for receiving weight;
+	int weight = 0;
 	ADC1->CR2	|=	 ADC_CR2_ADON;//	Starts the conversion of ADC
 	for(;;)
 	{
+//		weight = hx711_weight(&loadcell, 10);
+//		printf("%.4f",weight);
 //		printf("Task1\r\n");
 		r_event_start = osMessageGet(startMeasureQueueHandle, 0); //Receiving values measured
 		if (r_event_start.status == osEventMessage){
 			start = r_event_start.value.v;
 		}
 		while(start == 1){
-//			printf("Inwhile\r\n");
 			USER_pressure_sensor(dataADC, &voltage); //Pressure Sensor, ADC
 			USER_flow_sensor(event_val_1,event_val_2,event_val,&frequency);//Flow Sensor, Timer Module(Capture Mode)
 //			voltage = (float)rand() / RAND_MAX * 100; //Random values for testing
 //			frequency = (float)rand() / RAND_MAX * 100;
 			convert2char(voltage, frequency, msg);//Convert values into char array
-//			convert2char(voltage, frequency, msg2);//Convert values into char array
 			if( osMessagePut(sendValuesQueueHandle, msg, 0) != osOK ){} //Send data to uart
 			if( osMessagePut(sendValuesLCDQueueHandle, msg, 0) != osOK ){} //Send data to lcd
+
 		}
 		temp = osKernelSysTick() - (delay*counter++);
 		osDelay(delay-temp);
@@ -459,7 +484,7 @@ void lcdTask(void const * argument)
 	uint32_t output = 1;
 	for(;;)
 	{
-		printf("Task3\r\n");
+//		printf("Task3\r\n");
 //		r_event = osMessageGet(sendButtonQueueHandle, 0); //Receiving button pressed
 //		if( r_event.status == osEventMessage ){
 //			output = 1;
@@ -475,13 +500,72 @@ void lcdTask(void const * argument)
 		r_event_values = osMessageGet(sendValuesLCDQueueHandle, 0); //Receiving values measured
 		if (r_event_values.status == osEventMessage){
 //			memcpy(inputValues, (uint8_t*)r_event_values.value.p, 21 * sizeof(uint8_t));
-			printf("lcdT: %s\r\n",(uint8_t*)r_event_values.value.p);
+//			printf("lcdT: %s\r\n",(uint8_t*)r_event_values.value.p);
 			outputInLCD(lcdState, r_event_values.value.p);
 		}
 
 
-//		if( osMessagePut(confirmationQueueHandle, output, 0) != osOK ){}
+//		if( osMessagePut(weightDataQueueHandle, output, 0) != osOK ){}
 
+		temp = osKernelSysTick() - (delay*counter++);
+		osDelay(delay-temp);
+	}
+}
+
+void weightTask(void const * argument){
+//	int delay = 500;
+//	uint32_t counter = 0;
+//	uint32_t temp = 0;
+	float weight = 0;
+	int counterF = 0;
+	for(;;)
+	{
+//		printf("Task\r\n");
+		weight = hx711_weight(&loadcell, 10);
+//		weight=3000;
+		if( osMessagePut(weightDataQueueHandle, (uint32_t)(int)weight, 0) != osOK ){}
+		printf("%.4f\r\n",weight);
+		if(weight<5000 && weight>3000){
+			if(weight<=3740) {
+				//turn valveIN on
+				GPIOC->ODR &= ~GPIO_ODR_ODR1;
+				//turn valveOUT and water pump off
+				GPIOB->ODR |= GPIO_ODR_ODR0;
+				GPIOA->ODR |= GPIO_ODR_ODR4;
+//				 printf("Less\r\n");
+			}else if(weight>=3930){
+				//turn valveIN off
+				GPIOC->ODR |= GPIO_ODR_ODR1;
+				//turn valveOUT and water pump on
+				GPIOB->ODR &= ~GPIO_ODR_ODR0;
+				GPIOA->ODR &= ~GPIO_ODR_ODR4;
+//				printf("More\r\n");
+			}
+		}
+		printf("%i",counterF);
+		counterF++;
+		if (counterF >100) counterF = 0;
+//		temp = osKernelSysTick() - (delay*counter++);
+//		osDelay(delay-temp);
+	}
+}
+
+void testTask(void const * argument){
+	int delay = 100;
+	uint32_t counter = 0;
+	uint32_t temp = 0;
+	osEvent r_event_weight;
+	int counterF = 0;
+	for(;;)
+	{
+//		printf("Task 6\r\n");
+		r_event_weight = osMessageGet(weightDataQueueHandle, 0); //Receiving values measured
+		if (r_event_weight.status == osEventMessage){
+			printf("weightM %i\r\n",(int)r_event_weight.value.v);
+		}
+//		printf("Repeat: %i\r\n",counterF);
+		counterF++;
+		if (counterF >100) counterF = 0;
 		temp = osKernelSysTick() - (delay*counter++);
 		osDelay(delay-temp);
 	}
