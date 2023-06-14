@@ -137,12 +137,12 @@ int main(void)
   USER_ADC_Calibration();
   USER_TIMER2_Capture_Init(); //Timer (Capture mode)
   USER_LCD_Init(); //Matrix Keyboard
+
   loadcell.lock=0; //Weight sensor
   loadcell.offset=0;
   hx711_init(&loadcell, GPIOC, GPIO_PIN_3, GPIOC, GPIO_PIN_2); //3 clk, 2 pin
   hx711_coef_set(&loadcell, 500); // read after calibration //min 3750, max 3900-3950  354.5
   hx711_tare(&loadcell, 10);/*morado 5v, negro ground, blanco data, gris clk*/
-
 
   printf("Starting...\r\n");
   /* USER CODE END 2 */
@@ -428,7 +428,7 @@ void sendDataTask(void const * argument)
 		if (r_event_values.status == osEventMessage){
 //			memcpy(inputValues, (uint8_t*)r_event_values.value.p, 21 * sizeof(uint8_t));
 //			printf("sendTask\r\n");
-//			printf("%s\r\n",(uint8_t*)r_event_values.value.p);
+			printf("%s\r\n",(uint8_t*)r_event_values.value.p);
 			USER_USART3_Transmit(r_event_values.value.p,21 * sizeof(uint8_t));
 		}
 		temp = osKernelSysTick() - (delay*counter++);
@@ -523,8 +523,8 @@ void weightTask(void const * argument){
 //		printf("Task\r\n");
 		weight = hx711_weight(&loadcell, 10);
 //		weight=3000;
-		if( osMessagePut(weightDataQueueHandle, (uint32_t)(int)weight, 0) != osOK ){}
-		printf("%.4f\r\n",weight);
+//		if( osMessagePut(weightDataQueueHandle, (uint32_t)(int)weight, 0) != osOK ){}
+//		printf("%.4f\r\n",weight);
 		if(weight<5000 && weight>3000){
 			if(weight<=3740) {
 				//turn valveIN on
@@ -542,7 +542,7 @@ void weightTask(void const * argument){
 //				printf("More\r\n");
 			}
 		}
-		printf("%i",counterF);
+//		printf("%i",counterF);
 		counterF++;
 		if (counterF >100) counterF = 0;
 //		temp = osKernelSysTick() - (delay*counter++);
