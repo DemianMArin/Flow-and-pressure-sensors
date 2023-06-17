@@ -85,12 +85,26 @@ void testTask(void const * argument);
 void USER_RCC_Init(void); /*Init of clocks, GPIO and LCD func*/
 void USER_GPIO_Init(void);
 void USER_LCD_Init(void);
+void USER_EXTI_Init(void);
 
 void USER_pressure_sensor(uint16_t dataADC, float * voltage); /*Data recovery functions*/
 void USER_flow_sensor(uint16_t event_val_1, uint16_t event_val_2, uint16_t event_val, float * frequency);
 
 void convert2char(float f1, float f2, char *result); /*Interface functions*/
 void outputInLCD(int stateprev, char * measurement);
+
+void EXTI9_5_IRQHandler(void){
+	if( EXTI->PR & EXTI_PR_PR8 ){
+		GPIOA->ODR ^= GPIO_ODR_ODR5;//	toggle USER Led
+		EXTI->PR	|=	EXTI_PR_PR8;//		External Interrupt Flag cleared
+		interrupt = 1;
+		//turn valveIN off
+		GPIOC->ODR |= GPIO_ODR_ODR1;
+		//turn valveOUT and water pump on
+		GPIOB->ODR |= GPIO_ODR_ODR0;
+		GPIOA->ODR |= GPIO_ODR_ODR4;
+	}
+}
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -137,7 +151,9 @@ int main(void)
   USER_ADC_Calibration();
   USER_TIMER2_Capture_Init(); //Timer (Capture mode)
   USER_LCD_Init(); //Matrix Keyboard
+  USER_EXTI_Init();//Interrupt
 
+  int interrupt = 0;
   loadcell.lock=0; //Weight sensor
   loadcell.offset=0;
   hx711_init(&loadcell, GPIOC, GPIO_PIN_3, GPIOC, GPIO_PIN_2); //3 clk, 2 pin
@@ -180,16 +196,17 @@ int main(void)
 //  defaultTaskHandle = osThreadCreate(osThread(defaultTask), NULL);
 
   /* USER CODE BEGIN RTOS_THREADS */
-  osThreadDef(Task1, measureTask, osPriorityNormal, 0, 256);
-  measureTaskHandle = osThreadCreate(osThread(Task1), NULL);
-  osThreadDef(Task2, sendDataTask, osPriorityNormal, 0, 128);
-  sendDataTaskHandle = osThreadCreate(osThread(Task2), NULL);
+//  osThreadDef(Task1, measureTask, osPriorityNormal, 0, 256);
+//  measureTaskHandle = osThreadCreate(osThread(Task1), NULL);
+//  osThreadDef(Task2, sendDataTask, osPriorityNormal, 0, 128);
+//  sendDataTaskHandle = osThreadCreate(osThread(Task2), NULL);
 //  osThreadDef(Task3, mxkeypadTask, osPriorityNormal, 0, 128);
 //  mxkeypadTaskHandle = osThreadCreate(osThread(Task3), NULL);
 //  osThreadDef(Task4, lcdTask, osPriorityNormal, 0, 256);
 //  lcdTaskHandle = osThreadCreate(osThread(Task4), NULL);
-  osThreadDef(Task5, weightTask, osPriorityNormal, 0, 256);
-  weightSensorHandle = osThreadCreate(osThread(Task5), NULL);
+//  osThreadDef(Task5, weightTask, osPriorityNormal, 0, 256);
+//  weightSensorHandle = osThreadCreate(osThread(Task5), NULL);
+
 //  osThreadDef(Task6, testTask, osPriorityNormal, 0, 384);
 //  testTaskHandle = osThreadCreate(osThread(Task6), NULL);
 
@@ -269,9 +286,12 @@ static void MX_GPIO_Init(void)
 
 /* USER CODE BEGIN 4 */
 void USER_RCC_Init(void){
-	RCC->APB2ENR	|=	 RCC_APB2ENR_IOPAEN;// I/O port A clock enable
+//	RCC->APB2ENR	|=	 RCC_APB2ENR_IOPAEN;// I/O port A clock enable
+	RCC->APB2ENR	|=	 RCC_APB2ENR_IOPAEN//		I/O port A clock enable
+					|	 RCC_APB2ENR_AFIOEN;//          AFIO clock enable
 	RCC->APB2ENR	|=	 RCC_APB2ENR_IOPBEN;// I/O port B clock enable
 	RCC->APB2ENR	|=	 RCC_APB2ENR_IOPCEN;// I/O port C clock enable
+
 
 	USER_TIMER2_RCC_Init(); // TIMER2 clock enable
 	USER_TIMER3_RCC_Init(); //TIMER3 clock enable
@@ -291,6 +311,18 @@ void USER_GPIO_Init(void){
 	USER_ADC_GPIO_Init(); //ADC
 	USER_TIMER2_CAPTUREMODE_GPIO_Init(); //Timer (Capture Mode)
 	USER_GPIO_Init_Valve_WaterPump(); //Valve in, out and water pump
+
+	//pin PA8 (EXTI input line) as input floating
+	GPIOA->CRH	&=	~GPIO_CRH_MODE8 & ~GPIO_CRH_CNF8_1;
+	GPIOA->CRH	|=  	 GPIO_CRH_CNF8_0;
+}
+void USER_EXTI_Init(void){
+	AFIO->EXTICR[3]	&=	~AFIO_EXTICR3_EXTI8;
+	EXTI->PR	|=	 EXTI_PR_PR8;
+	EXTI->IMR	|=	 EXTI_IMR_MR8;
+	EXTI->FTSR	|=	 EXTI_FTSR_TR8;
+	NVIC_SetPriority(EXTI9_5_IRQn, 5);//    		The priority must be above level 5
+	NVIC_EnableIRQ(EXTI9_5_IRQn);
 }
 void USER_pressure_sensor(uint16_t dataADC, float *voltage){
   dataADC = USER_ADC_Read();
@@ -301,20 +333,19 @@ void USER_pressure_sensor(uint16_t dataADC, float *voltage){
 
 void USER_flow_sensor(uint16_t event_val_1, uint16_t event_val_2, uint16_t event_val, float * frequency){
 	float period = 0;
-//	if(!(TIM2->SR & TIM_SR_CC1IF)){
-//		period=0;
-//		*frequency=0;
-//	}else{
+	if(!(TIM2->SR & TIM_SR_CC1IF)){
+		period=0;
+		*frequency=0;
+	}else{
 		event_val_1 = USER_TIMER2_Capture_Event();
 		event_val_2 = USER_TIMER2_Capture_Event();
 		event_val = event_val_2 - event_val_1;
 		period = ( 1.0 / 64000000.0 ) * event_val * (TIM2->PSC + 1);
 		*frequency = 1/period;
-//	}
+	}
 
 //	printf("Period: %.5f\r\n",period);
 //	printf("Frequency: %.5f\r\n",frequency);
-//	return frequency;
 }
 
 void USER_LCD_Init(void){
@@ -392,12 +423,11 @@ void measureTask(void const * argument)
 	ADC1->CR2	|=	 ADC_CR2_ADON;//	Starts the conversion of ADC
 	for(;;)
 	{
-//		weight = hx711_weight(&loadcell, 10);
-//		printf("%.4f",weight);
-//		printf("Task1\r\n");
+		printf("Task1\r\n");
 		r_event_start = osMessageGet(startMeasureQueueHandle, 0); //Receiving values measured
 		if (r_event_start.status == osEventMessage){
-			start = r_event_start.value.v;
+//			start = r_event_start.value.v;
+			start=1;
 		}
 		while(start == 1){
 			USER_pressure_sensor(dataADC, &voltage); //Pressure Sensor, ADC
@@ -407,9 +437,9 @@ void measureTask(void const * argument)
 			convert2char(voltage, frequency, msg);//Convert values into char array
 			if( osMessagePut(sendValuesQueueHandle, msg, 0) != osOK ){} //Send data to uart
 			if( osMessagePut(sendValuesLCDQueueHandle, msg, 0) != osOK ){} //Send data to lcd
-
 		}
 		temp = osKernelSysTick() - (delay*counter++);
+//		printf("%i\r\n",temp);
 		osDelay(delay-temp);
 	}
 }
@@ -428,7 +458,7 @@ void sendDataTask(void const * argument)
 		if (r_event_values.status == osEventMessage){
 //			memcpy(inputValues, (uint8_t*)r_event_values.value.p, 21 * sizeof(uint8_t));
 //			printf("sendTask\r\n");
-			printf("%s\r\n",(uint8_t*)r_event_values.value.p);
+//			printf("%s\r\n",(uint8_t*)r_event_values.value.p);
 			USER_USART3_Transmit(r_event_values.value.p,21 * sizeof(uint8_t));
 		}
 		temp = osKernelSysTick() - (delay*counter++);
@@ -466,6 +496,7 @@ void mxkeypadTask(void const * argument)
 //		}
 
 		temp = osKernelSysTick() - (delay*counter++);
+		printf("%i\r\n",temp);
 		osDelay(delay-temp);
 	}
 }
@@ -485,17 +516,17 @@ void lcdTask(void const * argument)
 	for(;;)
 	{
 //		printf("Task3\r\n");
-//		r_event = osMessageGet(sendButtonQueueHandle, 0); //Receiving button pressed
-//		if( r_event.status == osEventMessage ){
-//			output = 1;
-//			if(r_event.value.v == 1 && counterStart <=0) { //Receive start only once
-//				counterStart++;
-//				inputButton = r_event.value.v;
-//				lcdState = 4;
-//			}
-//		}else{
-//			output = 0;
-//		}
+		r_event = osMessageGet(sendButtonQueueHandle, 0); //Receiving button pressed
+		if( r_event.status == osEventMessage ){
+			output = 1;
+			if(r_event.value.v == 1 && counterStart <=0) { //Receive start only once
+				counterStart++;
+				inputButton = r_event.value.v;
+				lcdState = 4;
+			}
+		}else{
+			output = 0;
+		}
 //
 		r_event_values = osMessageGet(sendValuesLCDQueueHandle, 0); //Receiving values measured
 		if (r_event_values.status == osEventMessage){
@@ -505,27 +536,26 @@ void lcdTask(void const * argument)
 		}
 
 
-//		if( osMessagePut(weightDataQueueHandle, output, 0) != osOK ){}
 
 		temp = osKernelSysTick() - (delay*counter++);
+//		printf("%i\r\n",temp);
 		osDelay(delay-temp);
 	}
 }
 
 void weightTask(void const * argument){
-//	int delay = 500;
+//	int delay = 0;
 //	uint32_t counter = 0;
 //	uint32_t temp = 0;
 	float weight = 0;
-	int counterF = 0;
 	for(;;)
 	{
 //		printf("Task\r\n");
 		weight = hx711_weight(&loadcell, 10);
-//		weight=3000;
+		weight=3000;
 //		if( osMessagePut(weightDataQueueHandle, (uint32_t)(int)weight, 0) != osOK ){}
 //		printf("%.4f\r\n",weight);
-		if(weight<5000 && weight>3000){
+		if(weight<5000 && weight>3000 && interrupt = 0){
 			if(weight<=3740) {
 				//turn valveIN on
 				GPIOC->ODR &= ~GPIO_ODR_ODR1;
@@ -542,11 +572,6 @@ void weightTask(void const * argument){
 //				printf("More\r\n");
 			}
 		}
-//		printf("%i",counterF);
-		counterF++;
-		if (counterF >100) counterF = 0;
-//		temp = osKernelSysTick() - (delay*counter++);
-//		osDelay(delay-temp);
 	}
 }
 
